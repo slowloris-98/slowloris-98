@@ -1,0 +1,68 @@
+name: Update Now Playing
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch now playing
+        id: np
+        run: |
+          DATA=$(curl -sf "https://udayan-atreya.vercel.app/api/now-playing?format=json" || echo "{}")
+          SONG=$(echo "$DATA"    | jq -r '.song    // empty')
+          ARTIST=$(echo "$DATA"  | jq -r '.artist  // empty')
+          URL=$(echo "$DATA"     | jq -r '.url     // empty')
+          IS_PLAYING=$(echo "$DATA" | jq -r '.isPlaying // false')
+          echo "song=$SONG"           >> $GITHUB_OUTPUT
+          echo "artist=$ARTIST"       >> $GITHUB_OUTPUT
+          echo "url=$URL"             >> $GITHUB_OUTPUT
+          echo "is_playing=$IS_PLAYING" >> $GITHUB_OUTPUT
+
+      - name: Update README
+        run: |
+          SONG="${{ steps.np.outputs.song }}"
+          ARTIST="${{ steps.np.outputs.artist }}"
+          URL="${{ steps.np.outputs.url }}"
+          IS_PLAYING="${{ steps.np.outputs.is_playing }}"
+
+          if [ -n "$SONG" ]; then
+            if [ "$IS_PLAYING" = "true" ]; then
+              LABEL="currently listening to"
+            else
+              LABEL="last played"
+            fi
+            LINE="🎵 *${LABEL}* [${SONG} — ${ARTIST}](${URL})"
+          else
+            LINE="🎵 *not listening to anything right now*"
+          fi
+
+          python3 - "$LINE" <<'EOF'
+import re, sys
+line = sys.argv[1]
+content = open('README.md').read()
+updated = re.sub(
+    r'<!-- NOW_PLAYING_START -->.*?<!-- NOW_PLAYING_END -->',
+    f'<!-- NOW_PLAYING_START -->\n{line}\n<!-- NOW_PLAYING_END -->',
+    content,
+    flags=re.DOTALL
+)
+open('README.md', 'w').write(updated)
+EOF
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet && exit 0
+          git add README.md
+          git commit -m "update: now playing"
+          git push
